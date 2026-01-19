@@ -1,4 +1,4 @@
-# Spiking Neural Network Based Vision Encoder for Dual-Efficient Co-Inference in Large Vision Language Models
+# Spiking Neural Network Based Vision Encoder for Dual-Efficient Co-Inference in Large VLMs
 Test code for articles submitted to IEEE Transactions on Circuits and Systems for Video Technology. If you think it's useful, please give it a star. Thank you！
 
 ## Requirements

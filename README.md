@@ -76,7 +76,8 @@ We conducted testing on the RK3576 chip. The specific code is located in the "rk
 
 ## follow-up work
 After the review finished, the training code will be updated.
-
+## References
+The code is implemented based on [BLIP]: (https://github.com/salesforce/BLIP)， [Spike-Driven-Transformer]:(https://github.com/BICLab/Spike-Driven-Transformer) . We thank the contributors for their great work!
 ## Some renderings based on the proposed methods in this paper
  [Visual interpretation]
 ---

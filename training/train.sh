@@ -1,0 +1,1 @@
+(nohup python -m torch.distributed.launch --nproc_per_node=2 train_SNN.py  > run_sdt-smallbook0.5Wv1.log 2>&1)&

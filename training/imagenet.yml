@@ -36,6 +36,4 @@ cooldown_epochs: 0
 warmup_epochs: 0
 warmup_lr: 0.000001
 opt: adamW
-# smoothing: 0.1
 workers: 12
-#resume: /home/zhou/new_disk/Transformer-SNN/imagenet/src_5/pretrained/svit-8-512.pth.tar

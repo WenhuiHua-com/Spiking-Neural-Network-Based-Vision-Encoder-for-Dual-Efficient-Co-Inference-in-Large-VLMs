@@ -69,8 +69,7 @@ except ImportError:
 
 torch.backends.cudnn.benchmark = True
 _logger = logging.getLogger('train')
-# The first arg parser parses out only the --config argument, this argument is used to
-# load a yaml file containing key-values that override the defaults for the main parser below
+
 config_parser = parser = argparse.ArgumentParser(description='Training Config', add_help=False)
 parser.add_argument('-c', '--config', default=str(Path(__file__).with_name('imagenet.yml')), type=str, metavar='FILE',
                     help='YAML config file specifying default arguments')
@@ -97,7 +96,7 @@ parser.add_argument('--initial-checkpoint', default='', type=str, metavar='PATH'
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='Resume full model and optimizer state from checkpoint (default: none)')
 parser.add_argument('--no-resume-opt', action='store_true', default=False,
-                    help='prevent resume of optimizer state when resuming model')  # Default: False.
+                    help='prevent resume of optimizer state when resuming model')
 parser.add_argument('--num-classes', type=int, default=None, metavar='N',
                     help='number of label classes (Model default if None)')
 parser.add_argument('--gp', default=None, type=str, metavar='POOL',
@@ -226,7 +225,6 @@ parser.add_argument('--drop-path', type=float, default=None, metavar='PCT',
 parser.add_argument('--drop-block', type=float, default=None, metavar='PCT',
                     help='Drop block rate (default: None)')
 
-# Batch norm parameters (only works with gen_efficientnet based models currently)
 parser.add_argument('--bn-tf', action='store_true', default=False,
                     help='Use Tensorflow BatchNorm defaults for models that support it (default: False)')
 parser.add_argument('--bn-momentum', type=float, default=None,
@@ -289,20 +287,16 @@ parser.add_argument('--torchscript', dest='torchscript', action='store_true',
 parser.add_argument('--log-wandb', action='store_true', default=False,
                     help='log training and validation metrics to wandb')
 
-
 def _parse_args():
-    # Do we have a config file to parse?
+
     args_config, remaining = config_parser.parse_known_args()
     if args_config.config:
         with open(args_config.config, 'r') as f:
             cfg = yaml.safe_load(f)
             parser.set_defaults(**cfg)
 
-    # The main arg parser parses the rest of the args, the usual
-    # defaults will have been overridden if config file specified.
     args = parser.parse_args(remaining)
 
-    # Cache the args as a text string to save them in the output dir later
     args_text = yaml.safe_dump(args.__dict__, default_flow_style=False)
     return args, args_text
 
@@ -323,7 +317,7 @@ def main():
         args.distributed = int(os.environ['WORLD_SIZE']) > 1
     args.device = 'cuda:1'
     args.world_size = 1
-    args.rank = 0  # global rank
+    args.rank = 0
     if args.distributed:
         args.device = 'cuda:%d' % args.local_rank
         torch.cuda.set_device(args.local_rank)
@@ -336,7 +330,6 @@ def main():
         _logger.info('Training with a single process on 1 GPUs.')
     assert args.rank >= 0
 
-    # resolve AMP arguments based on PyTorch / Apex availability
     use_amp = None
     if args.amp:
         # `--amp` chooses native amp before apex (APEX ver not actively maintained)
@@ -368,9 +361,9 @@ def main():
             self.size = size
             self.dim = dim
             self.device = device
-            self.book = torch.empty(0, dim, device=self.device)  # Initialize an empty codebook.
-            self.weights = torch.empty(0, device=self.device)  # Store the accumulated codeword weights.
-            self.counter = 0  # Number of codewords currently stored.
+            self.book = torch.empty(0, dim, device=self.device)
+            self.weights = torch.empty(0, device=self.device)
+            self.counter = 0
 
         def add(self, tokens, importance_scores):
             tokens = tokens.to(self.device)
@@ -387,37 +380,32 @@ def main():
                     sim_scores, indices = torch.topk(sim_matrix[i], k=1, largest=True)
                     index = indices[0]
 
-                    # Importance-weighted aggregation.
                     wa = self.weights[index]
                     wb = importance_scores[i]
                     self.book[index] = (wa * self.book[index] + wb * token) / (wa + wb)
-                    self.weights[index] = wa + wb  # Accumulate the merged weight.
+                    self.weights[index] = wa + wb
 
         def search(self, tokens):
             tokens = tokens.to(self.device)
-            sim_matrix = torch.mm(tokens, self.book.T)  # Compute similarity between input tokens and codebook
-            # Find the highest-scoring codeword for each token.
-            sim_scores, indices = torch.topk(sim_matrix, k=1, largest=True)  # Return matching scores and indices.
+            sim_matrix = torch.mm(tokens, self.book.T)
+
+            sim_scores, indices = torch.topk(sim_matrix, k=1, largest=True)
             indices = indices.squeeze()
-            #result_vectors = self.book[indices.squeeze()]
-            return indices  # Return codeword indices.
+
+            return indices
 
         def save(self, path):
-            torch.save({'book': self.book, 'weights': self.weights}, path)  # Save codewords and their accumulated weights.
+            torch.save({'book': self.book, 'weights': self.weights}, path)
 
         def load(self, path):
             data = torch.load(path)
-            self.book = data['book'].to(self.device)  # Load codewords.
-            self.weights = data['weights'].to(self.device)  # Load accumulated weights.
+            self.book = data['book'].to(self.device)
+            self.weights = data['weights'].to(self.device)
             self.counter = self.book.size(0)
-
-
-
-
 
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
-        args.num_classes = model.num_classes  # FIXME handle model default vs config num_classes more elegantly
+        args.num_classes = model.num_classes
 
     if args.local_rank == 0:
         _logger.info(
@@ -425,27 +413,23 @@ def main():
 
     data_config = resolve_data_config(vars(args), model=model, verbose=args.local_rank == 0)
 
-    # setup augmentation batch splits for contrastive loss or split bn
     num_aug_splits = 0
     if args.aug_splits > 0:
         assert args.aug_splits > 1, 'A split of 1 makes no sense'
         num_aug_splits = args.aug_splits
 
-    # enable split bn (separate bn stats per batch-portion)
     if args.split_bn:
         assert num_aug_splits > 1 or args.resplit
         model = convert_splitbn_model(model, max(num_aug_splits, 2))
 
-    # move model to GPU, enable channels last layout if set
     model.cuda()
     if args.channels_last:
         model = model.to(memory_format=torch.channels_last)
 
-    # setup synchronized BatchNorm for distributed training
     if args.distributed and args.sync_bn:
         assert not args.split_bn
         if has_apex and use_amp != 'native':
-            # Apex SyncBN preferred unless native amp is activated
+
             model = convert_syncbn_model(model)
         else:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -461,8 +445,7 @@ def main():
 
     optimizer = create_optimizer_v2(model, **optimizer_kwargs(cfg=args))
 
-    # setup automatic mixed-precision (AMP) loss scaling and op casting
-    amp_autocast = suppress  # do nothing
+    amp_autocast = suppress
     loss_scaler = None
     if use_amp == 'apex':
         model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
@@ -478,7 +461,6 @@ def main():
         if args.local_rank == 0:
             _logger.info('AMP not enabled. Training in float32.')
 
-    # optionally resume from a checkpoint
     resume_epoch = None
     if args.resume:
         resume_epoch = resume_checkpoint(
@@ -487,7 +469,6 @@ def main():
             loss_scaler=None if args.no_resume_opt else loss_scaler,
             log_info=args.local_rank == 0)
 
-    # setup exponential moving average of model weights, SWA could be used here too
     model_ema = None
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP wrapper
@@ -496,25 +477,22 @@ def main():
         if args.resume:
             load_checkpoint(model_ema.module, args.resume, use_ema=True)
 
-    # setup distributed training
-    # setup distributed training
     if args.distributed:
         if has_apex and use_amp != 'native':
-            # Apex DDP preferred unless native amp is activated
+
             if args.local_rank == 0:
                 _logger.info("Using NVIDIA APEX DistributedDataParallel.")
             model = ApexDDP(model, delay_allreduce=True, find_unused_parameters=True)
         else:
             if args.local_rank == 0:
                 _logger.info("Using native Torch DistributedDataParallel.")
-            model = NativeDDP(model, device_ids=[args.local_rank], find_unused_parameters=True)  # can use device str in Torch >= 1.1
+            model = NativeDDP(model, device_ids=[args.local_rank], find_unused_parameters=True)
         # NOTE: EMA model does not need to be wrapped by DDP
 
-    # setup learning rate schedule and starting epoch
     lr_scheduler, num_epochs = create_scheduler(args, optimizer)
     start_epoch = 0
     if args.start_epoch is not None:
-        # a specified start_epoch will always override the resume epoch
+
         start_epoch = args.start_epoch
     elif resume_epoch is not None:
         start_epoch = resume_epoch
@@ -524,7 +502,6 @@ def main():
     if args.local_rank == 0:
         _logger.info('Scheduled epochs: {}'.format(num_epochs))
 
-    # create the train and eval datasets
     dataset_train = create_dataset(
         args.dataset,
         root=args.data_dir, split=args.train_split, is_training=True,
@@ -532,7 +509,6 @@ def main():
     dataset_eval = create_dataset(
         args.dataset, root=args.data_dir, split=args.val_split, is_training=False, batch_size=args.batch_size)
 
-    # setup mixup / cutmix
     collate_fn = None
     mixup_fn = None
     mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
@@ -547,20 +523,9 @@ def main():
         else:
             mixup_fn = Mixup(**mixup_args)
 
-    # wrap dataset in AugMix helper
     if num_aug_splits > 1:
         dataset_train = AugMixDataset(dataset_train, num_splits=num_aug_splits)
 
-    # class CosineSimilarityLoss(nn.Module):
-    #     def __init__(self, temperature=1.0):
-    #         super(CosineSimilarityLoss, self).__init__()
-            
-
-    #     def forward(self, student_features, teacher_features):
-    #         cos_sim = F.cosine_similarity(student_features, teacher_features, dim=-1)
-    #         return loss
-
-    # Create the BLIP teacher.
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     teacher_model = blip_retrieval(
         pretrained=args.teacher_weights,
@@ -568,13 +533,13 @@ def main():
         vit_grad_ckpt=True,
         queue_size=57600, negative_all_rank=False)
     teacher_model.eval()
-    teacher_model = teacher_model.to(device)  # Move the teacher to the selected device.
+    teacher_model = teacher_model.to(device)
     codebook_size = 131072
-    embedding_dim = 768  # BLIP token dimension.
+    embedding_dim = 768
     codebook = CodeBook(size=codebook_size, dim=embedding_dim, device=device)
-    codebook.load(args.codebook)  # Load the codebook.
+    codebook.load(args.codebook)
     print('loading codebook sets')
-    # create data loaders w/ augmentation pipeiine
+
     train_interpolation = args.train_interpolation
     if args.no_aug or not train_interpolation:
         train_interpolation = data_config['interpolation']
@@ -621,14 +586,9 @@ def main():
         pin_memory=args.pin_mem,
     )
 
-    # train_loss_fn = F.cosine_similarity().cuda()
-    # train_loss_fn = nn.MultiLabelSoftMarginLoss().cuda()
-    # validate_loss_fn = nn.MultiLabelSoftMarginLoss().cuda()
     train_loss_fn = nn.CrossEntropyLoss().cuda()
     validate_loss_fn = nn.CrossEntropyLoss().cuda()
-    #train_loss_fn = nn.MSELoss().cuda()
-    #validate_loss_fn = nn.MSELoss().cuda()
-    # setup checkpoint saver and eval metric tracking
+
     eval_metric = args.eval_metric
     best_metric = None
     best_epoch = None
@@ -677,7 +637,7 @@ def main():
                 eval_metrics = ema_eval_metrics
 
             if lr_scheduler is not None:
-                # step LR for next epoch
+
                 lr_scheduler.step(epoch + 1, eval_metrics[eval_metric])
 
             if output_dir is not None:
@@ -686,7 +646,7 @@ def main():
                     write_header=best_metric is None, log_wandb=args.log_wandb and has_wandb)
 
             if saver is not None:
-                # save proper checkpoint with eval metric
+
                 save_metric = eval_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
                 _logger.info('*** Best metric: {0} (epoch {1})'.format(best_metric, best_epoch))
@@ -695,9 +655,6 @@ def main():
         pass
     if best_metric is not None:
         _logger.info('*** Best metric: {0} (epoch {1})'.format(best_metric, best_epoch))
-
-
-
 
 def train_one_epoch(
         epoch, model, loader, optimizer, loss_fn, args,
@@ -733,15 +690,15 @@ def train_one_epoch(
             input = input.contiguous(memory_format=torch.channels_last)
         Teacher_feature = T_model.visual_encoder(input) # Extract BLIP teacher features with shape [batch, 197, 768].
         batch_size, num_patches, embedding_dim = Teacher_feature.shape
-        image_feat_reshaped = Teacher_feature.view(batch_size * num_patches, embedding_dim)  # Flatten tokens across the batch.
+        image_feat_reshaped = Teacher_feature.view(batch_size * num_patches, embedding_dim)
         indices = codebook.search(image_feat_reshaped)  # Assign a codeword index to each teacher token.
 
         with amp_autocast():
             output = model(input) # Return token logits averaged over the four time steps.
             output = output.view(batch_size*num_patches, -1)
             cover_label = indices.long()
-            #z_q = einsum('b n c, c d -> b n d', output, codebook.book)
-            loss = loss_fn(output, cover_label)   # Compute codeword classification loss.
+
+            loss = loss_fn(output, cover_label)
         sample_number += input.shape[0]
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))
@@ -754,7 +711,7 @@ def train_one_epoch(
                 parameters=model_parameters(model, exclude_head='agc' in args.clip_mode),
                 create_graph=second_order)
         else:
-            # loss.backward()
+
             loss.backward(create_graph=second_order)
             if args.clip_grad is not None:
                 dispatch_clip_grad(
@@ -811,13 +768,11 @@ def train_one_epoch(
             lr_scheduler.step_update(num_updates=num_updates, metric=losses_m.avg)
 
         end = time.time()
-        # end for
 
     if hasattr(optimizer, 'sync_lookahead'):
         optimizer.sync_lookahead()
     print(f'samples / s = {sample_number / (time.time() - start_time): .3f}')
     return OrderedDict([('loss', losses_m.avg)])
-
 
 def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='', T_model = None, codebook = None):
     batch_time_m = AverageMeter()
@@ -840,13 +795,12 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='',
 
             Teacher_feature = T_model.visual_encoder(input)  # Extract BLIP teacher features with shape [batch, 197, 768].
             batch_size, num_patches, embedding_dim = Teacher_feature.shape
-            image_feat_reshaped = Teacher_feature.view(batch_size * num_patches, embedding_dim)  # Flatten tokens across the batch.
+            image_feat_reshaped = Teacher_feature.view(batch_size * num_patches, embedding_dim)
             indices = codebook.search(image_feat_reshaped)  # Assign a codeword index to each teacher token.
             with amp_autocast():
                 output = model(input)
                 output = output.view(batch_size*num_patches, -1)
                 cover_label = indices.long()
-                #z_q = einsum('b n c, c d -> b n d', output, codebook.book)
 
             loss = loss_fn(output, cover_label)
             functional.reset_net(model)
@@ -875,7 +829,6 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='',
     metrics = OrderedDict([('loss', losses_m.avg)])
 
     return metrics
-
 
 if __name__ == '__main__':
     main()

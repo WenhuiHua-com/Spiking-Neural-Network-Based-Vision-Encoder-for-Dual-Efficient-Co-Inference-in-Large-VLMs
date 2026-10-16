@@ -15,6 +15,10 @@ NVIDIA CUDA specific speedups adopted from NVIDIA Apex examples
 
 Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import time
 import yaml
@@ -68,13 +72,15 @@ _logger = logging.getLogger('train')
 # The first arg parser parses out only the --config argument, this argument is used to
 # load a yaml file containing key-values that override the defaults for the main parser below
 config_parser = parser = argparse.ArgumentParser(description='Training Config', add_help=False)
-parser.add_argument('-c', '--config', default='imagenet.yml', type=str, metavar='FILE',
+parser.add_argument('-c', '--config', default=str(Path(__file__).with_name('imagenet.yml')), type=str, metavar='FILE',
                     help='YAML config file specifying default arguments')
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+parser.add_argument('--teacher-weights', required=True, help='BLIP retrieval checkpoint')
+parser.add_argument('--codebook', required=True, help='5000-entry codebook checkpoint')
 
 # Dataset / Model parameters
-parser.add_argument('-data-dir', metavar='DIR',default='/media/data/huawenhui/mae-main/mae-main/data',
+parser.add_argument('--data-dir', '-data-dir', metavar='DIR', required=True,
                     help='path to dataset')
 parser.add_argument('--dataset', '-d', metavar='NAME', default='',
                     help='dataset type (default: ImageFolder/ImageTar if empty)')
@@ -88,10 +94,10 @@ parser.add_argument('--pretrained', action='store_true', default=False,
                     help='Start with pretrained version of specified network (if avail)')
 parser.add_argument('--initial-checkpoint', default='', type=str, metavar='PATH',
                     help='Initialize model from this checkpoint (default: none)')
-parser.add_argument('--resume', default='/media/data/huawenhui/Spike-Driven-Transformer-main/Spike-Driven-Transformer-main/output/train/20241215-215219-resnet101-224/model_best.pth.tar', type=str, metavar='PATH',
+parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='Resume full model and optimizer state from checkpoint (default: none)')
 parser.add_argument('--no-resume-opt', action='store_true', default=False,
-                    help='prevent resume of optimizer state when resuming model')  # 原来是False
+                    help='prevent resume of optimizer state when resuming model')  # Default: False.
 parser.add_argument('--num-classes', type=int, default=None, metavar='N',
                     help='number of label classes (Model default if None)')
 parser.add_argument('--gp', default=None, type=str, metavar='POOL',
@@ -300,54 +306,6 @@ def _parse_args():
     args_text = yaml.safe_dump(args.__dict__, default_flow_style=False)
     return args, args_text
 
-# def multi_label_indices_to_one_hot(indices, num_classes):
-#     """
-#     将多标签索引列表转换为 one-hot 编码。
-
-#     Args:
-#         indices (list[Tensor]): 每个样本的索引张量，形状为 (batch_size, num_indices)。
-#         num_classes (int): 总类别数。
-
-#     Returns:
-#         Tensor: one-hot 编码张量，形状为 (batch_size, num_classes)。
-#     """
-#     # 获取 batch_size
-#     batch_size = len(indices)
-
-#     # 初始化 one-hot 张量
-#     one_hot = torch.zeros(batch_size, num_classes, device=indices[0].device)
-
-#     # 填充每个样本的 one-hot 编码
-#     for i, sample_indices in enumerate(indices):
-#         one_hot[i].scatter_(0, sample_indices, 1)
-
-#     return one_hot
-
-# def multi_label_indices_to_one_hot(indices, num_classes=524216):
-#     """
-#     将多标签索引列表转换为 one-hot 编码，每个索引独立生成一个 one-hot 编码。
-
-#     Args:
-#         indices (list[Tensor]): 每个样本的索引张量，形状为 (batch_size, num_indices)。
-#         num_classes (int): 总类别数，默认为 524216。
-
-#     Returns:
-#         Tensor: one-hot 编码张量，形状为 (batch_size, num_indices, num_classes)。
-#     """
-#     # 获取 batch_size
-#     batch_size = len(indices)
-
-#     # 初始化 one-hot 张量，大小为 (batch_size, num_indices, num_classes)
-#     one_hot = torch.zeros(batch_size, len(indices[0]), num_classes, device=indices[0].device)
-
-#     # 填充每个样本的 one-hot 编码
-#     for i, sample_indices in enumerate(indices):
-#         for j, index in enumerate(sample_indices):
-#             one_hot[i, j, index] = 1  # 在对应位置设置为 1
-
-#     return one_hot
-
-
 def main():
     setup_default_logging()
     args, args_text = _parse_args()
@@ -398,7 +356,7 @@ def main():
     model = create_model(
         'sdt',
         pretrained=False,
-        depths=6, sr_ratios=1
+        depths=6, sr_ratios=1, return_logits=True
     )
     print("Creating model")
     print(model)
@@ -410,9 +368,9 @@ def main():
             self.size = size
             self.dim = dim
             self.device = device
-            self.book = torch.empty(0, dim, device=self.device)  # 初始化空的 code-book
-            self.weights = torch.empty(0, device=self.device)  # 存储对应的权重
-            self.counter = 0  # 当前 code-book 中的条目数量
+            self.book = torch.empty(0, dim, device=self.device)  # Initialize an empty codebook.
+            self.weights = torch.empty(0, device=self.device)  # Store the accumulated codeword weights.
+            self.counter = 0  # Number of codewords currently stored.
 
         def add(self, tokens, importance_scores):
             tokens = tokens.to(self.device)
@@ -429,28 +387,28 @@ def main():
                     sim_scores, indices = torch.topk(sim_matrix[i], k=1, largest=True)
                     index = indices[0]
 
-                    # 权重加权聚合
+                    # Importance-weighted aggregation.
                     wa = self.weights[index]
                     wb = importance_scores[i]
                     self.book[index] = (wa * self.book[index] + wb * token) / (wa + wb)
-                    self.weights[index] = wa + wb  # 更新合并后的权重
+                    self.weights[index] = wa + wb  # Accumulate the merged weight.
 
         def search(self, tokens):
             tokens = tokens.to(self.device)
             sim_matrix = torch.mm(tokens, self.book.T)  # Compute similarity between input tokens and codebook
-            # Step 2: 获取每个token对应的最相似的码本条目
-            sim_scores, indices = torch.topk(sim_matrix, k=1, largest=True)  # 获取相似度分数和索引
+            # Find the highest-scoring codeword for each token.
+            sim_scores, indices = torch.topk(sim_matrix, k=1, largest=True)  # Return matching scores and indices.
             indices = indices.squeeze()
             #result_vectors = self.book[indices.squeeze()]
-            return indices  # 返回经过置零处理的替换向量
+            return indices  # Return codeword indices.
 
         def save(self, path):
-            torch.save({'book': self.book, 'weights': self.weights}, path)  # 保存码本和权重
+            torch.save({'book': self.book, 'weights': self.weights}, path)  # Save codewords and their accumulated weights.
 
         def load(self, path):
             data = torch.load(path)
-            self.book = data['book'].to(self.device)  # 加载码本
-            self.weights = data['weights'].to(self.device)  # 加载权重
+            self.book = data['book'].to(self.device)  # Load codewords.
+            self.weights = data['weights'].to(self.device)  # Load accumulated weights.
             self.counter = self.book.size(0)
 
 
@@ -599,26 +557,22 @@ def main():
             
 
     #     def forward(self, student_features, teacher_features):
-    #         # 计算余弦相似度
     #         cos_sim = F.cosine_similarity(student_features, teacher_features, dim=-1)
-    #         # 使用温度参数进行缩放
-    #         loss = 1 - cos_sim  # 想要最小化相似度，所以1 - cos_sim
-    #         loss = loss.mean()  # 返回批量的平均损失
     #         return loss
 
-    # 创造教师模型
+    # Create the BLIP teacher.
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     teacher_model = blip_retrieval(
-        pretrained='/media/data/huawenhui/BLIP-main/BLIP-main/model_base_retrieval_flickr.pth',
+        pretrained=args.teacher_weights,
         image_size=224, vit='base',
         vit_grad_ckpt=True,
         queue_size=57600, negative_all_rank=False)
     teacher_model.eval()
-    teacher_model = teacher_model.to(device)  # 把BLIP的视觉模型loading进来并锁定
+    teacher_model = teacher_model.to(device)  # Move the teacher to the selected device.
     codebook_size = 131072
-    embedding_dim = 768  # 假设每个 token 的维度是 768
+    embedding_dim = 768  # BLIP token dimension.
     codebook = CodeBook(size=codebook_size, dim=embedding_dim, device=device)
-    codebook.load('/media/data/huawenhui/Spike-Driven-Transformer-main/Spike-Driven-Transformer-main/flicker_purning_05w_codebook.pth')  # 把码本loading进来
+    codebook.load(args.codebook)  # Load the codebook.
     print('loading codebook sets')
     # create data loaders w/ augmentation pipeiine
     train_interpolation = args.train_interpolation
@@ -668,7 +622,6 @@ def main():
     )
 
     # train_loss_fn = F.cosine_similarity().cuda()
-    # validate_loss_fn = F.cosine_similarity().cuda()   # 把‘填空题’ 转换为了 ‘选择题’
     # train_loss_fn = nn.MultiLabelSoftMarginLoss().cuda()
     # validate_loss_fn = nn.MultiLabelSoftMarginLoss().cuda()
     train_loss_fn = nn.CrossEntropyLoss().cuda()
@@ -778,21 +731,17 @@ def train_one_epoch(
                 input, target = mixup_fn(input, target)
         if args.channels_last:
             input = input.contiguous(memory_format=torch.channels_last)
-        Teacher_feature = T_model.visual_encoder(input) #用BLIP的视觉编码器编码样本得到[bs, 197, 768]的特征
+        Teacher_feature = T_model.visual_encoder(input) # Extract BLIP teacher features with shape [batch, 197, 768].
         batch_size, num_patches, embedding_dim = Teacher_feature.shape
-        image_feat_reshaped = Teacher_feature.view(batch_size * num_patches, embedding_dim)  #为了批量处理
-        indices = codebook.search(image_feat_reshaped)  #把所有索引都找出来了
-        #indices_feat = indices.view(batch_size, num_patches)  # 把所有索引转换为每个样本该有的原始码本基元
-        #cover_label = multi_label_indices_to_one_hot(indices_feat, 524216)  #此时把所有的index变换为了 one-hot标签了 维度是[1, 524288]
+        image_feat_reshaped = Teacher_feature.view(batch_size * num_patches, embedding_dim)  # Flatten tokens across the batch.
+        indices = codebook.search(image_feat_reshaped)  # Assign a codeword index to each teacher token.
 
         with amp_autocast():
-            output = model(input) # 这个时候返回T=4均值脉冲特征编码
+            output = model(input) # Return token logits averaged over the four time steps.
             output = output.view(batch_size*num_patches, -1)
             cover_label = indices.long()
             #z_q = einsum('b n c, c d -> b n d', output, codebook.book)
-            #print(output.shape)  # 应该是 [4, 197, 524288]
-            #print(codebook.book.shape)  # 应该是 [524288, 768]
-            loss = loss_fn(output, cover_label)   # 计算多分类损失函数
+            loss = loss_fn(output, cover_label)   # Compute codeword classification loss.
         sample_number += input.shape[0]
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))
@@ -889,12 +838,10 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='',
             if args.channels_last:
                 input = input.contiguous(memory_format=torch.channels_last)
 
-            Teacher_feature = T_model.visual_encoder(input)  # 用BLIP的视觉编码器编码样本得到[bs, 197, 768]的特征
+            Teacher_feature = T_model.visual_encoder(input)  # Extract BLIP teacher features with shape [batch, 197, 768].
             batch_size, num_patches, embedding_dim = Teacher_feature.shape
-            image_feat_reshaped = Teacher_feature.view(batch_size * num_patches, embedding_dim)  # 为了批量处理
-            indices = codebook.search(image_feat_reshaped)  # 把所有索引都找出来了
-            #indices_feat = indices.view(batch_size, num_patches)  # 把所有索引转换为每个样本该有的原始码本基元
-            #cover_label = multi_label_indices_to_one_hot(indices_feat, 524216)  #此时把所有的index变换为了 one-hot标签了 维度是[1, 524288]
+            image_feat_reshaped = Teacher_feature.view(batch_size * num_patches, embedding_dim)  # Flatten tokens across the batch.
+            indices = codebook.search(image_feat_reshaped)  # Assign a codeword index to each teacher token.
             with amp_autocast():
                 output = model(input)
                 output = output.view(batch_size*num_patches, -1)

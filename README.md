@@ -74,8 +74,8 @@ We conducted testing on the RK3576 chip. The specific code is located in the "rk
 3. You may need to modify the RKNN_MODEL_PATH in the "rknn_run_3576.py" file to point to the location of the rknn model
 4. Use ```python3 rknn_run_3576.py``` to run
 
-## follow-up work
-The recovered original codebook trimming and SNN training sources are available in [training/](training/README.md), including setup notes and short-run verification results.
+## Training
+See [SNN training instructions](training/README.md).
 ## References
 The code is implemented based on [BLIP]: (https://github.com/salesforce/BLIP)， [Spike-Driven-Transformer]:(https://github.com/BICLab/Spike-Driven-Transformer) . We thank the contributors for their great work!
 ## Some renderings based on the proposed methods in this paper

@@ -42,8 +42,10 @@ class SpikeDrivenTransformer(nn.Module):
         cml=False,
         pretrained=False,
         pretrained_cfg=None,
+        return_logits=False,
     ):
         super().__init__()
+        self.return_logits = return_logits
         self.num_classes = num_classes
         self.depths = depths
 
@@ -135,6 +137,8 @@ class SpikeDrivenTransformer(nn.Module):
         x = self.head_lif(x)
         x = self.head(x)  # Get the logits for the token at each position
         x = x.mean(0)  # The dimensions should be [bs, 197, codebooksize]
+        if self.return_logits:
+            return x
         index = x.argmax(dim=2)
         return index
 

@@ -76,6 +76,20 @@ We conducted testing on the RK3576 chip. The specific code is located in the "rk
 
 ## Training
 See [SNN training instructions](training/README.md).
+## Citation
+
+If you find this work useful, please cite:
+
+```bibtex
+@article{hua2026spiking,
+  author = {Hua, Wenhui and Hu, Xiaowei and Zhang, Huanglin and Chen, Lingyu and Zhou, Jianyang and Hong, Xuemin and Cheng, Xiang},
+  title = {{Spiking Neural Network Based Vision Encoder for Dual-Efficient Co-Inference in Large VLMs}},
+  journal = {IEEE Transactions on Circuits and Systems for Video Technology},
+  year = {2026},
+  doi = {10.1109/tcsvt.2026.3743658}
+}
+```
+
 ## References
 The code is implemented based on [BLIP]: (https://github.com/salesforce/BLIP)， [Spike-Driven-Transformer]:(https://github.com/BICLab/Spike-Driven-Transformer) . We thank the contributors for their great work!
 ## Some renderings based on the proposed methods in this paper
